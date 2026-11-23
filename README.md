@@ -1,6 +1,6 @@
 # RAI · Rotildino Avelino Inteligência
 
-> Assistente pessoal de IA por voz para Windows, com holograma animado no estilo JARVIS.
+> Assistente pessoal de IA por voz para Windows, com holograma animado.
 
 A RAI funciona como a Alexa: você diz **"RAI, ..."**, ela entende o que você falou, pensa com uma inteligência artificial (Gemini, Ollama ou Claude), executa ações no computador e responde em voz alta. Se preferir, você também pode **escrever** para ela no chat do holograma.
 
