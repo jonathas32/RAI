@@ -1,0 +1,8 @@
+anthropic>=0.40
+google-genai>=1.0
+python-dotenv
+faster-whisper
+sounddevice
+numpy
+edge-tts
+pyttsx3

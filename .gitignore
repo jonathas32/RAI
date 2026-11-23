@@ -1,0 +1,11 @@
+# segredos
+.env
+
+# ambiente Python
+.venv/
+__pycache__/
+*.pyc
+
+# dados pessoais da RAI (tarefas e memória)
+dados/
+rai_erros.log

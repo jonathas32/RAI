@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RAI</title>
+<style>
+  :root{--c:#4fd8ff}
+  html,body{margin:0;height:100%;background:#03070d;overflow:hidden}
+  canvas{display:block;width:100vw;height:100vh}
+  .hud{position:fixed;font:500 12px/1.4 "Consolas","Cascadia Mono",monospace;color:var(--c);letter-spacing:.14em;text-transform:uppercase;opacity:.75;pointer-events:none}
+  #tl{top:18px;left:22px} #tr{top:18px;right:22px;text-align:right} #bl{top:56px;left:22px;opacity:.45}
+  #legenda{position:fixed;left:50%;bottom:92px;transform:translateX(-50%);width:min(860px,90vw);text-align:center;pointer-events:none;
+    font:400 clamp(15px,2.1vw,22px)/1.45 "Segoe UI",system-ui,sans-serif;color:#dff6ff;text-shadow:0 0 12px var(--c)}
+  #voce{font-size:.72em;color:#8fb3c4;text-shadow:none;margin-bottom:6px;min-height:1.2em}
+  #rai{min-height:1.4em}
+  #estado{position:fixed;left:50%;transform:translateX(-50%);font:600 13px "Consolas",monospace;letter-spacing:.5em;color:var(--c);text-shadow:0 0 10px var(--c);pointer-events:none}
+
+  /* ── chat ── */
+  #chat{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);width:min(760px,calc(100vw - 32px));display:flex;gap:8px;z-index:5}
+  #chat input{flex:1;min-width:0;background:rgba(6,20,32,.85);border:1px solid rgba(79,216,255,.35);border-radius:6px;color:#e6f7ff;
+    padding:12px 14px;font:15px "Segoe UI",system-ui,sans-serif;outline:none;backdrop-filter:blur(4px)}
+  #chat input:focus{border-color:var(--c);box-shadow:0 0 0 3px rgba(79,216,255,.18),0 0 18px rgba(79,216,255,.18)}
+  #chat input::placeholder{color:#6f93a6}
+  #chat button{background:transparent;border:1px solid var(--c);color:var(--c);border-radius:6px;padding:0 16px;cursor:pointer;
+    font:600 12px "Consolas",monospace;letter-spacing:.14em;text-transform:uppercase;min-height:44px}
+  #chat button.prim{background:var(--c);color:#02101a}
+  #chat button:hover{filter:brightness(1.15)}
+  #chat button:focus-visible,#chat input:focus-visible{outline:2px solid #ffb547;outline-offset:2px}
+  #historico{position:fixed;top:70px;right:20px;bottom:84px;width:min(380px,calc(100vw - 40px));overflow-y:auto;z-index:6;
+    background:rgba(4,14,24,.92);border:1px solid rgba(79,216,255,.25);border-radius:8px;padding:14px;display:flex;flex-direction:column;gap:10px;
+    font:14px/1.45 "Segoe UI",system-ui,sans-serif;color:#dff6ff;backdrop-filter:blur(6px)}
+  #historico .m{max-width:90%;padding:8px 11px;border-radius:6px;white-space:pre-wrap;overflow-wrap:anywhere}
+  #historico .m small{display:block;font:11px "Consolas",monospace;letter-spacing:.1em;color:#7fa6b8;margin-bottom:2px}
+  #historico .voce{align-self:flex-end;background:rgba(255,181,71,.10);border:1px solid rgba(255,181,71,.3)}
+  #historico .rai{align-self:flex-start;background:rgba(79,216,255,.08);border:1px solid rgba(79,216,255,.25)}
+  #historico .vazio{color:#7fa6b8;font-size:13px}
+  @media (max-width:600px){#chat button#btnHist{display:none}}
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<div class="hud" id="tl">RAI · NÚCLEO<br><span id="modelo">—</span></div>
+<div class="hud" id="tr"><span id="relogio">--:--:--</span><br><span id="data"></span></div>
+<div class="hud" id="bl">F11 · TELA CHEIA</div>
+<div id="estado">INICIANDO</div>
+<div id="legenda"><div id="voce"></div><div id="rai"></div></div>
+<form id="chat" autocomplete="off">
+  <input id="msg" placeholder="Escreva para a RAI… (Enter envia)" aria-label="Mensagem para a RAI" maxlength="2000">
+  <button class="prim" type="submit">Enviar</button>
+  <button type="button" id="btnHist" aria-expanded="false">Histórico</button>
+</form>
+<aside id="historico" hidden aria-label="Histórico da conversa"><div class="vazio">Nenhuma mensagem ainda.</div></aside>
+<script>
+const cv = document.getElementById("cv"), ctx = cv.getContext("2d");
+let W, H, DPR, CX, CY, R;
+function resize(){
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = innerWidth; H = innerHeight;
+  cv.width = W*DPR; cv.height = H*DPR; ctx.setTransform(DPR,0,0,DPR,0,0);
+  CX = W/2; CY = H*0.40; R = Math.min(W, H)*0.15;
+  document.getElementById("estado").style.top = (CY + R*2.05) + "px";
+}
+addEventListener("resize", resize); resize();
+
+/* ---------- estado vindo do Python ---------- */
+const CORES = { iniciando:[79,216,255], aguardando:[79,216,255], ativo:[140,240,255], pensando:[255,181,71], falando:[90,225,255], erro:[255,90,95] };
+const ROTULO = { iniciando:"INICIANDO", aguardando:"DIGA \"RAI\"", ativo:"OUVINDO", pensando:"PROCESSANDO", falando:"RESPONDENDO", erro:"FALHA" };
+let S = { estado:"iniciando", nivel:0, voce:"", rai:"", modelo:"" }, online = false;
+let cor = [79,216,255], nivelSuave = 0, energia = 0, giro = 1;
+async function poll(){
+  try{
+    const r = await fetch("/estado", {cache:"no-store"}); S = await r.json(); online = true;
+    document.getElementById("estado").textContent = ROTULO[S.estado] || S.estado.toUpperCase();
+    document.getElementById("voce").textContent = S.voce ? "› " + S.voce : "";
+    document.getElementById("rai").textContent = S.rai || "";
+    document.getElementById("modelo").textContent = S.modelo || "";
+    renderHistorico(S.historico || []);
+  }catch{ online = false; document.getElementById("estado").textContent = "DESCONECTADO"; }
+  setTimeout(poll, 90);
+}
+poll();
+setInterval(()=>{
+  const d = new Date();
+  document.getElementById("relogio").textContent = d.toLocaleTimeString("pt-BR");
+  document.getElementById("data").textContent = d.toLocaleDateString("pt-BR",{weekday:"short",day:"2-digit",month:"short"});
+}, 500);
+
+
+
+/* ---------- chat escrito ---------- */
+const TOKEN = "__TOKEN__";
+const form = document.getElementById("chat"), msg = document.getElementById("msg");
+const hist = document.getElementById("historico"), btnHist = document.getElementById("btnHist");
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const texto = msg.value.trim(); if (!texto) return;
+  msg.value = ""; msg.placeholder = "Enviado. Aguarde a resposta…";
+  try{
+    await fetch("/mensagem", {method:"POST", headers:{"Content-Type":"application/json","X-RAI-Token":TOKEN}, body:JSON.stringify({texto})});
+  }catch{ msg.value = texto; msg.placeholder = "Não consegui enviar. A RAI está rodando?"; return; }
+  setTimeout(() => msg.placeholder = "Escreva para a RAI… (Enter envia)", 2500);
+  msg.focus();
+});
+btnHist.addEventListener("click", () => {
+  hist.hidden = !hist.hidden; btnHist.setAttribute("aria-expanded", String(!hist.hidden));
+  if (!hist.hidden) hist.scrollTop = hist.scrollHeight;
+});
+let histAssinatura = "";
+function renderHistorico(h){
+  const assinatura = h.length + "|" + (h.length ? h[h.length-1].hora + h[h.length-1].texto.length : "");
+  if (assinatura === histAssinatura) return;
+  histAssinatura = assinatura;
+  const noFim = hist.scrollTop + hist.clientHeight >= hist.scrollHeight - 30;
+  hist.textContent = "";
+  if (!h.length){ const v = document.createElement("div"); v.className = "vazio"; v.textContent = "Nenhuma mensagem ainda."; hist.append(v); return; }
+  for (const m of h){
+    const d = document.createElement("div"); d.className = "m " + m.quem;
+    const t = document.createElement("small"); t.textContent = (m.quem === "rai" ? "RAI" : "VOCÊ") + " · " + m.hora;
+    d.append(t, document.createTextNode(m.texto)); hist.append(d);
+  }
+  if (noFim) hist.scrollTop = hist.scrollHeight;
+}
+addEventListener("keydown", (e) => {          // começar a digitar em qualquer lugar foca a caixa
+  if (document.activeElement !== msg && e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) msg.focus();
+});
+
+/* ---------- núcleo: esfera de partículas ---------- */
+const N = 520, pts = [];
+for (let i = 0; i < N; i++){            // distribuição de Fibonacci na esfera
+  const y = 1 - (i/(N-1))*2, rr = Math.sqrt(1-y*y), th = i*2.399963;
+  pts.push([Math.cos(th)*rr, y, Math.sin(th)*rr, Math.random()]);
+}
+const faiscas = Array.from({length:70}, () => ({a:Math.random()*6.283, r:1.1+Math.random()*1.2, v:(Math.random()*.4+.1)*(Math.random()<.5?-1:1), s:Math.random()}));
+
+const rgba = (a) => `rgba(${cor[0]|0},${cor[1]|0},${cor[2]|0},${a})`;
+function arco(r, a0, a1, w, a){ ctx.beginPath(); ctx.arc(CX, CY, r, a0, a1); ctx.lineWidth = w; ctx.strokeStyle = rgba(a); ctx.stroke(); }
+
+let t0 = performance.now(), ang = 0;
+function frame(now){
+  const dt = Math.min(.05, (now - t0)/1000); t0 = now;
+  const e = online ? S.estado : "erro";
+  const alvo = CORES[e] || CORES.aguardando;
+  for (let k=0;k<3;k++) cor[k] += (alvo[k]-cor[k])*Math.min(1, dt*4);
+  document.documentElement.style.setProperty("--c", `rgb(${cor.map(v=>v|0).join(",")})`);
+
+  // energia: microfone ao ouvir, "voz" sintética ao falar, respiração em espera
+  const tt = now/1000;
+  let alvoE = .08 + Math.sin(tt*1.3)*.03;
+  if (e === "ativo" || e === "aguardando") alvoE += Math.min(1, S.nivel*1.0);
+  if (e === "falando") alvoE = .35 + Math.abs(Math.sin(tt*9.1)*Math.sin(tt*3.7+1)*.55) + Math.random()*.08;
+  if (e === "pensando") alvoE = .25 + Math.sin(tt*6)*.08;
+  energia += (alvoE - energia)*Math.min(1, dt*10);
+  const giroAlvo = e === "pensando" ? 4.5 : e === "falando" ? 1.8 : 1;
+  giro += (giroAlvo - giro)*Math.min(1, dt*2);
+  ang += dt*giro;
+
+  // fundo
+  ctx.globalCompositeOperation = "source-over";
+  const bg = ctx.createRadialGradient(CX, CY, 0, CX, CY, Math.max(W,H)*.75);
+  bg.addColorStop(0, "#071524"); bg.addColorStop(1, "#02050a");
+  ctx.fillStyle = bg; ctx.fillRect(0,0,W,H);
+  ctx.strokeStyle = rgba(.035); ctx.lineWidth = 1;          // grade
+  for (let x = (CX % 40); x < W; x += 40){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
+  for (let y = (CY % 40); y < H; y += 40){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
+
+  ctx.globalCompositeOperation = "lighter";
+
+  // brilho central
+  const rc = R*(.55 + energia*.18);
+  const g = ctx.createRadialGradient(CX, CY, 0, CX, CY, rc*2.2);
+  g.addColorStop(0, rgba(.55)); g.addColorStop(.25, rgba(.18)); g.addColorStop(1, rgba(0));
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(CX, CY, rc*2.2, 0, 6.283); ctx.fill();
+
+  // esfera de partículas girando em 3D
+  const ay = ang*.6, ax = .45 + Math.sin(tt*.3)*.15, cy = Math.cos(ay), sy = Math.sin(ay), cx = Math.cos(ax), sx = Math.sin(ax);
+  for (const p of pts){
+    const wob = 1 + energia*.22*Math.sin(tt*6 + p[3]*20);
+    let x = p[0]*wob, y = p[1]*wob, z = p[2]*wob;
+    let x1 = x*cy - z*sy, z1 = x*sy + z*cy;
+    let y1 = y*cx - z1*sx, z2 = y*sx + z1*cx;
+    const f = 2.6/(2.6 + z2), px = CX + x1*rc*f, py = CY + y1*rc*f;
+    const a = .15 + (1 - (z2+1)/2)*.75;
+    ctx.fillStyle = rgba(a); ctx.fillRect(px-1, py-1, 1.6+f*.6, 1.6+f*.6);
+  }
+  // núcleo sólido
+  const nucleo = ctx.createRadialGradient(CX, CY, 0, CX, CY, rc*.42);
+  nucleo.addColorStop(0, "rgba(255,255,255,.95)"); nucleo.addColorStop(.4, rgba(.8)); nucleo.addColorStop(1, rgba(0));
+  ctx.fillStyle = nucleo; ctx.beginPath(); ctx.arc(CX, CY, rc*.42, 0, 6.283); ctx.fill();
+
+  // anel 1: fino com marcações
+  arco(R*.98, 0, 6.283, 1, .45);
+  for (let i = 0; i < 72; i++){
+    const a = i/72*6.283 + ang*.15, l = i%6===0 ? 9 : 4;
+    ctx.beginPath(); ctx.moveTo(CX+Math.cos(a)*R*.98, CY+Math.sin(a)*R*.98);
+    ctx.lineTo(CX+Math.cos(a)*(R*.98-l), CY+Math.sin(a)*(R*.98-l));
+    ctx.strokeStyle = rgba(i%6===0 ? .7 : .3); ctx.lineWidth = 1; ctx.stroke();
+  }
+  // espectro radial (reage à voz)
+  const rb = R*1.12, NB = 120;
+  for (let i = 0; i < NB; i++){
+    const a = i/NB*6.283 - 1.5708;
+    const n = Math.abs(Math.sin(i*.37 + tt*5) + Math.sin(i*.11 - tt*3.3))*.5;
+    const len = 3 + energia*R*.42*n;
+    ctx.beginPath(); ctx.moveTo(CX+Math.cos(a)*rb, CY+Math.sin(a)*rb);
+    ctx.lineTo(CX+Math.cos(a)*(rb+len), CY+Math.sin(a)*(rb+len));
+    ctx.strokeStyle = rgba(.25 + n*.5); ctx.lineWidth = 2; ctx.stroke();
+  }
+  // anel 2: três arcos grossos girando
+  for (let k = 0; k < 3; k++){ const a = ang*.8 + k*2.094; arco(R*1.62, a, a+1.25, 3, .65); }
+  // anel 3: tracejado no sentido contrário
+  ctx.setLineDash([2, 9]); arco(R*1.78, -ang*.5, -ang*.5+6.283, 2, .5); ctx.setLineDash([]);
+  // anel 4: segmentos finos + varredura
+  for (let k = 0; k < 8; k++){ const a = -ang*.25 + k*.785; arco(R*2.0, a, a+.5, 1, .35); }
+  const sw = ang*1.4;
+  const grad = ctx.createConicGradient ? ctx.createConicGradient(sw, CX, CY) : null;
+  if (grad){
+    grad.addColorStop(0, rgba(.0)); grad.addColorStop(.92, rgba(0)); grad.addColorStop(1, rgba(.22));
+    ctx.fillStyle = grad; ctx.beginPath(); ctx.arc(CX, CY, R*2.0, 0, 6.283); ctx.arc(CX, CY, R*1.82, 6.283, 0, true); ctx.fill();
+  }
+  // faíscas orbitando
+  for (const s of faiscas){
+    s.a += s.v*dt*giro;
+    const r = R*s.r*(1 + energia*.08);
+    ctx.fillStyle = rgba(.25 + s.s*.5);
+    ctx.fillRect(CX + Math.cos(s.a)*r, CY + Math.sin(s.a)*r*.92, 2, 2);
+  }
+  // linhas de interface laterais
+  ctx.strokeStyle = rgba(.25); ctx.lineWidth = 1;
+  for (const lado of [-1, 1]){
+    const x0 = CX + lado*R*2.15, x1 = CX + lado*R*2.9;
+    ctx.beginPath(); ctx.moveTo(x0, CY); ctx.lineTo(x1, CY); ctx.lineTo(x1 + lado*20, CY-20); ctx.stroke();
+    for (let i = 0; i < 5; i++){
+      const w = (Math.sin(tt*2 + i + lado) * .5 + .5) * 60 + 10;
+      ctx.fillStyle = rgba(.18 + (i===0?energia*.5:0));
+      ctx.fillRect(lado > 0 ? x1 - 70 : x1, CY + 14 + i*9, lado > 0 ? w : 70 - (70 - w), 3);
+    }
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
